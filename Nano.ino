@@ -15,7 +15,7 @@
 
 // ==================== KONFIGURASI PIN ====================
 // Bluetooth HC-05 Configuration
-SoftwareSerial bluetooth(0, 1); // RX, TX (menggunakan D0, D1)
+SoftwareSerial bluetooth(11, 12); // RX, TX (menggunakan D11, D12 - bebas konflik Serial)
 
 struct MotorConfig {
     // L298N Pin Connections
@@ -63,24 +63,17 @@ bool bluetoothMode = true;
 // ==================== DEKLARASI FUNGSI ====================
 void sendBluetooth(String message);
 void processBluetoothCommand(char command);
-void processSerialCommand(char command);
 
 // ==================== CLASS GRIPPER CONTROLLER ====================
 class GripperController {
-private:
-    bool initialized = false;
 public:
     void init() {
-        if (!initialized) {
-            gripperLeftServo.attach(gripper.GRIPPER_LEFT_PIN);
-            gripperRightServo.attach(gripper.GRIPPER_RIGHT_PIN);
-            liftServo.attach(gripper.LIFT_PIN);
-            initialized = true;
-        }
+        gripperLeftServo.attach(gripper.GRIPPER_LEFT_PIN);
+        gripperRightServo.attach(gripper.GRIPPER_RIGHT_PIN);
+        liftServo.attach(gripper.LIFT_PIN);
     }
     
     void openGripper() {
-        init();
         gripperLeftServo.write(gripper.GRIPPER_LEFT_OPEN);
         gripperRightServo.write(gripper.GRIPPER_RIGHT_OPEN);
         gripperOpen = true;
@@ -88,29 +81,25 @@ public:
     }
     
     void closeGripper() {
-        init();
         gripperLeftServo.write(gripper.GRIPPER_LEFT_CLOSE);
         gripperRightServo.write(gripper.GRIPPER_RIGHT_CLOSE);
         gripperOpen = false;
         sendBluetooth("Gripper CLOSED");
     }
 
-    void CalibrateArmGripper() {
-        init();
+    void calibrateGripper() {
         gripperLeftServo.write(gripper.GRIPPER_LEFT_CLB);
         gripperRightServo.write(gripper.GRIPPER_RIGHT_CLB);
         sendBluetooth("Kalibrasi Gripper");
     }
     
     void liftUpFunc() {
-        init();
         liftServo.write(gripper.LIFT_UP);
         liftUp = true;
         sendBluetooth("Lift UP");
     }
     
     void liftDownFunc() {
-        init();
         liftServo.write(gripper.LIFT_DOWN);
         liftUp = false;
         sendBluetooth("Lift DOWN");
@@ -186,12 +175,12 @@ public:
 
 // ==================== IMPLEMENTASI FUNGSI BANTU ====================
 void sendBluetooth(String message) {
-    if (bluetoothMode) {
+    if (bluetoothMode && bluetooth) {
         bluetooth.println(message);
-        // Kita juga print ke Serial Monitor untuk debugging
-        Serial.print("BT OUT: ");
-        Serial.println(message);
     }
+    // Selalu cetak ke Serial Monitor untuk debugging
+    Serial.print("BT OUT: ");
+    Serial.println(message);
 }
 
 // ==================== INISIALISASI PIN ====================
@@ -212,12 +201,14 @@ void initializePins() {
 // ==================== SETUP ====================
 void setup() {
     Serial.begin(9600);
+    Serial.setTimeout(50); // Cegah parseInt() blocking lama
     bluetooth.begin(9600); 
     
     delay(1000);
     Serial.println("SYSTEM START...");
 
     initializePins();
+    gripperCtrl.init(); // Init servo sekali di sini
     
     // Posisi awal
     gripperCtrl.openGripper();
@@ -240,10 +231,11 @@ void loop() {
       int pwmValue = Serial.parseInt(); // Baca angkanya (0-255)
       
       // Update kecepatan motor (Tanpa ganggu servo)
-      motorCtrl.setSpeed(pwmValue, pwmValue); 
+      currentSpeed = constrain(pwmValue, motor.MIN_SPEED, motor.MAX_SPEED);
+      motorCtrl.setSpeed(currentSpeed, currentSpeed); 
       
-      // Bersihkan sisa karakter (newline/spasi)
-      while(Serial.available()) Serial.read(); 
+      // Buang newline setelah angka
+      while(Serial.available() && Serial.peek() == '\n') Serial.read(); 
     }
     else {
       // Jika bukan V, berarti perintah biasa (F, B, L, R, dll)
@@ -281,40 +273,12 @@ void processBluetoothCommand(char command) {
         gripperCtrl.closeGripper();
         break;
     case CMD_START:
-        gripperCtrl.CalibrateArmGripper();
+        gripperCtrl.calibrateGripper();
         break;
     case CMD_PAUSE:
         motorCtrl.stop();
         break;
     default:
-        // Jika perintah tidak dikenali, coba cek apakah itu perintah Serial biasa (w,a,s,d)
-        // Opsional: processSerialCommand(command); 
         break;
   }
-}
-
-// ==================== PROCESS SERIAL COMMANDS ====================
-void processSerialCommand(char command) {
-    switch (command) {
-        case 'w': motorCtrl.moveForward(); break;
-        case 's': motorCtrl.moveBackward(); break;
-        case 'a': motorCtrl.turnLeft(); break;
-        case 'd': motorCtrl.turnRight(); break;
-        case 'x': motorCtrl.stop(); break;
-        
-        // Speed control
-        case '+': 
-            if (currentSpeed < motor.MAX_SPEED) currentSpeed += 10; 
-            break;
-        case '-': 
-            if (currentSpeed > motor.MIN_SPEED) currentSpeed -= 10; 
-            break;
-
-        // Gripper Serial keys
-        case 'l': gripperCtrl.openGripper(); break;
-        case 'j': gripperCtrl.closeGripper(); break;
-        case 'i': gripperCtrl.liftUpFunc(); break;
-        case 'k': gripperCtrl.liftDownFunc(); break;
-        case 'm': gripperCtrl.CalibrateArmGripper(); break;
-    }
 }
